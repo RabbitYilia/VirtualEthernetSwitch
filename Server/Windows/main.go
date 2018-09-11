@@ -11,24 +11,54 @@ import (
 	"encoding/pem"
 	"log"
 	"math/big"
+	"net"
 	"strconv"
-
 	"time"
 
 	quic "github.com/lucas-clemente/quic-go"
 	"github.com/songgao/packets/ethernet"
-	//"github.com/songgao/water"
+	"github.com/songgao/water"
 	aead "golang.org/x/crypto/chacha20poly1305"
 )
 
 var debug bool
 var key string
 var routing map[string]quic.Stream
+var localmac string
+var forwardOnly bool
+var ifce *water.Interface
 
 func main() {
 	key = "Password"
+	forwardOnly = false
 	routing = make(map[string]quic.Stream)
 	debug = true
+
+	interfaces, err := net.Interfaces()
+	for _, inter := range interfaces {
+		ifname := inter.Name
+		mac := inter.HardwareAddr
+		//This is the name of the TAP device
+		if ifname == "本地连接 7" {
+			localmac = hex.EncodeToString(mac)
+		}
+		if debug {
+			log.Println(ifname)
+			log.Println(mac)
+		}
+	}
+
+	if !forwardOnly {
+		ifce, err = water.New(water.Config{
+			DeviceType: water.TAP,
+		})
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+
+	go ServerTX()
+
 	listener, err := quic.ListenAddr("127.0.0.1:6060", generateTLSConfig(), nil)
 	if err != nil {
 		log.Fatalln(err)
@@ -39,6 +69,86 @@ func main() {
 			log.Fatalln(err)
 		}
 		go ServerRX(conn)
+	}
+
+}
+
+func ServerTX() {
+	ciper, err := gerateAEAD(key)
+	if err != nil {
+		log.Panicln(err)
+		return
+	}
+	var frame ethernet.Frame
+	for {
+		frame.Resize(1500)
+		n, err := ifce.Read([]byte(frame))
+		if err != nil {
+			log.Fatal(err)
+		}
+		frame = frame[:n]
+		if debug {
+			log.Printf("-----TX-----")
+			log.Printf("Dst: %s\n", frame.Destination())
+			log.Printf("Src: %s\n", frame.Source())
+			log.Printf("Ethertype: % x\n", frame.Ethertype())
+			log.Printf("Payload: % x\n", frame.Payload())
+		}
+		ciphertext := ciper.Seal(nil, geratenonce(), []byte(frame), nil)
+		srcstr := hex.EncodeToString(frame.Source())
+		dststr := hex.EncodeToString(frame.Destination())
+		if dststr == "ffffffffffff" {
+			//broadcast
+			for todst, tostream := range routing {
+				//avoid loopback
+				if todst == localmac {
+					continue
+				}
+				if todst == srcstr {
+					continue
+				}
+				if debug {
+					log.Printf("-----TX-Broadcast-----")
+					log.Printf("Dst: %s\n", frame.Destination())
+					log.Printf("Src: %s\n", frame.Source())
+					log.Printf("Ethertype: % x\n", frame.Ethertype())
+					log.Printf("Payload: % x\n", frame.Payload())
+				}
+				tostream.Write(ciphertext)
+			}
+		} else {
+			tostream, ok := routing[dststr]
+			if !ok {
+				//according to the rule:broadcast this frame or handle it to system
+				for todst, tostream := range routing {
+					//avoid loopback
+					if todst == localmac {
+						continue
+					}
+					if todst == srcstr {
+						continue
+					}
+					if debug {
+						log.Printf("-----TX-Broadcast-Study----")
+						log.Printf("Dst: %s\n", frame.Destination())
+						log.Printf("Src: %s\n", frame.Source())
+						log.Printf("Ethertype: % x\n", frame.Ethertype())
+						log.Printf("Payload: % x\n", frame.Payload())
+					}
+					tostream.Write(ciphertext)
+				}
+			} else {
+				// if dst online send it directly
+				if debug {
+					log.Printf("-----TX-----")
+					log.Printf("Dst: %s\n", frame.Destination())
+					log.Printf("Src: %s\n", frame.Source())
+					log.Printf("Ethertype: % x\n", frame.Ethertype())
+					log.Printf("Payload: % x\n", frame.Payload())
+				}
+				tostream.Write(ciphertext)
+			}
+		}
 	}
 }
 
@@ -96,7 +206,7 @@ func ServerRX(conn quic.Session) {
 					continue
 				}
 				if debug {
-					log.Printf("-----Broadcast-----")
+					log.Printf("-----Forward-Broadcast-----")
 					log.Printf("Dst: %s\n", frame.Destination())
 					log.Printf("Src: %s\n", frame.Source())
 					log.Printf("Ethertype: % x\n", frame.Ethertype())
@@ -108,6 +218,21 @@ func ServerRX(conn quic.Session) {
 			//write to local?
 			//TBE
 		} else {
+			if dststr == localmac {
+				frame = ethernet.Frame([]byte(plaintext))
+				_, err = ifce.Write(frame)
+				if err != nil {
+					log.Fatal(err)
+				}
+				if debug {
+					log.Printf("-----RX-Local----")
+					log.Printf("Dst: %s\n", frame.Destination())
+					log.Printf("Src: %s\n", frame.Source())
+					log.Printf("Ethertype: % x\n", frame.Ethertype())
+					log.Printf("Payload: % x\n", frame.Payload())
+				}
+			}
+
 			tostream, ok := routing[dststr]
 			if !ok {
 				//according to the rule:broadcast this frame or handle it to system
@@ -120,7 +245,7 @@ func ServerRX(conn quic.Session) {
 						continue
 					}
 					if debug {
-						log.Printf("-----Forward-Broadcast-----")
+						log.Printf("-----Forward-Broadcast-Study----")
 						log.Printf("Dst: %s\n", frame.Destination())
 						log.Printf("Src: %s\n", frame.Source())
 						log.Printf("Ethertype: % x\n", frame.Ethertype())
