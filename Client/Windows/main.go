@@ -40,6 +40,7 @@ func main() {
 	go readframe(ifce, stream)
 	writeframe(ifce, stream)
 
+	ifce.Close()
 	session.Close()
 }
 
