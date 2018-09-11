@@ -75,7 +75,9 @@ func ServerRX(conn quic.Session) {
 			continue
 		}
 		frame = ethernet.Frame([]byte(plaintext))
-		routing[hex.EncodeToString(frame.Source())] = stream
+		srcstr := hex.EncodeToString(frame.Source())
+		routing[srcstr] = stream
+		dststr := hex.EncodeToString(frame.Destination())
 		if debug {
 			log.Printf("-----RX-----")
 			log.Printf("Dst: %s\n", frame.Destination())
@@ -83,8 +85,63 @@ func ServerRX(conn quic.Session) {
 			log.Printf("Ethertype: % x\n", frame.Ethertype())
 			log.Printf("Payload: % x\n", frame.Payload())
 		}
-		//ciphertext := ciper.Seal(nil, geratenonce(), []byte("Get"), nil)
-		//stream.Write(ciphertext)
+		if dststr == "ffffffffffff" {
+			//broadcast
+			for todst, tostream := range routing {
+				//avoid loopback
+				if tostream == stream {
+					continue
+				}
+				if todst == srcstr {
+					continue
+				}
+				if debug {
+					log.Printf("-----Broadcast-----")
+					log.Printf("Dst: %s\n", frame.Destination())
+					log.Printf("Src: %s\n", frame.Source())
+					log.Printf("Ethertype: % x\n", frame.Ethertype())
+					log.Printf("Payload: % x\n", frame.Payload())
+				}
+				ciphertext := ciper.Seal(nil, geratenonce(), []byte(frame), nil)
+				tostream.Write(ciphertext)
+			}
+			//write to local?
+			//TBE
+		} else {
+			tostream, ok := routing[dststr]
+			if !ok {
+				//according to the rule:broadcast this frame or handle it to system
+				for todst, tostream := range routing {
+					//avoid loopback
+					if tostream == stream {
+						continue
+					}
+					if todst == srcstr {
+						continue
+					}
+					if debug {
+						log.Printf("-----Forward-Broadcast-----")
+						log.Printf("Dst: %s\n", frame.Destination())
+						log.Printf("Src: %s\n", frame.Source())
+						log.Printf("Ethertype: % x\n", frame.Ethertype())
+						log.Printf("Payload: % x\n", frame.Payload())
+					}
+					ciphertext := ciper.Seal(nil, geratenonce(), []byte(frame), nil)
+					tostream.Write(ciphertext)
+				}
+			} else {
+				// if dst online send it directly
+				if debug {
+					log.Printf("-----Forward-----")
+					log.Printf("Dst: %s\n", frame.Destination())
+					log.Printf("Src: %s\n", frame.Source())
+					log.Printf("Ethertype: % x\n", frame.Ethertype())
+					log.Printf("Payload: % x\n", frame.Payload())
+				}
+				ciphertext := ciper.Seal(nil, geratenonce(), []byte(frame), nil)
+				tostream.Write(ciphertext)
+			}
+		}
 	}
 }
 
