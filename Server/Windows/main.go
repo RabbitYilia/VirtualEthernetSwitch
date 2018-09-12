@@ -58,6 +58,8 @@ func main() {
 			log.Fatal(err)
 		}
 		go ServerTX()
+	} else {
+		localmac = ""
 	}
 
 	listener, err := quic.ListenAddr("127.0.0.1:6060", generateTLSConfig(), nil)
@@ -108,7 +110,7 @@ func ServerTX() {
 					continue
 				}
 				if debug {
-					log.Printf("↑↑↑↑↑TX-Broadcast↑↑↑↑↑")
+					log.Printf("-----TX-Broadcast-----")
 				}
 				conn, ok := mapconn[todst]
 				if !ok {
@@ -138,7 +140,7 @@ func ServerTX() {
 						continue
 					}
 					if debug {
-						log.Printf("↑↑↑↑↑TX-Broadcast-Study↑↑↑↑↑")
+						log.Printf("-----TX-Broadcast-Study-----")
 					}
 					conn, ok := mapconn[todst]
 					if !ok {
@@ -157,7 +159,7 @@ func ServerTX() {
 			} else {
 				// if dst online send it directly
 				if debug {
-					log.Printf("↑↑↑↑↑TX-Unicast↑↑↑↑↑")
+					log.Printf("-----TX-Unicast-----")
 				}
 				conn, ok := mapconn[dststr]
 				if !ok {
@@ -238,7 +240,7 @@ func ServerRX(thisconn quic.Session) {
 					continue
 				}
 				if debug {
-					log.Printf("↑↑↑↑↑Forward-Broadcast↑↑↑↑↑")
+					log.Printf("-----Forward-Broadcast-----")
 				}
 				conn, ok := mapconn[todst]
 				if !ok {
@@ -261,11 +263,11 @@ func ServerRX(thisconn quic.Session) {
 					log.Fatal(err)
 				}
 				if debug {
-					log.Printf("↑↑↑↑↑RX-Broadcast↑↑↑↑↑")
+					log.Printf("-----RX-Broadcast-----")
 				}
 			} else {
 				if debug {
-					log.Printf("↑↑↑↑↑Ignore-RX-Broadcast↑↑↑↑↑")
+					log.Printf("-----Ignore-RX-Broadcast-----")
 				}
 			}
 		} else {
@@ -276,10 +278,10 @@ func ServerRX(thisconn quic.Session) {
 						log.Fatal(err)
 					}
 					if debug {
-						log.Printf("↑↑↑↑↑RX-Local↑↑↑↑↑")
+						log.Printf("-----RX-Local-----")
 					}
 				} else {
-					log.Printf("↑↑↑↑↑Ignore-RX-Local↑↑↑↑↑")
+					log.Printf("-----Ignore-RX-Local-----")
 				}
 			} else {
 				tostream, ok := routing[dststr]
@@ -294,7 +296,7 @@ func ServerRX(thisconn quic.Session) {
 							continue
 						}
 						if debug {
-							log.Printf("↑↑↑↑↑Forward-Broadcast-Study↑↑↑↑↑")
+							log.Printf("-----Forward-Broadcast-Study-----")
 						}
 						conn, ok := mapconn[todst]
 						if !ok {
@@ -313,7 +315,7 @@ func ServerRX(thisconn quic.Session) {
 				} else {
 					// if dst online send it directly
 					if debug {
-						log.Printf("↑↑↑↑↑Forward↑↑↑↑↑")
+						log.Printf("-----Forward-----")
 					}
 					conn, ok := mapconn[dststr]
 					if !ok {
