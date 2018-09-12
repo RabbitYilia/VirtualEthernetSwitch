@@ -24,6 +24,7 @@ import (
 var debug bool
 var key string
 var routing map[string]quic.Stream
+var mapconn map[string]quic.Session
 var localmac string
 var forwardOnly bool
 var ifce *water.Interface
@@ -32,6 +33,7 @@ func main() {
 	key = "Password"
 	forwardOnly = false
 	routing = make(map[string]quic.Stream)
+	mapconn = make(map[string]quic.Session)
 	debug = true
 
 	interfaces, err := net.Interfaces()
@@ -55,9 +57,8 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
+		go ServerTX()
 	}
-
-	go ServerTX()
 
 	listener, err := quic.ListenAddr("127.0.0.1:6060", generateTLSConfig(), nil)
 	if err != nil {
@@ -87,16 +88,15 @@ func ServerTX() {
 			log.Fatal(err)
 		}
 		frame = frame[:n]
+		ciphertext := ciper.Seal(nil, geratenonce(), []byte(frame), nil)
+		srcstr := hex.EncodeToString(frame.Source())
+		dststr := hex.EncodeToString(frame.Destination())
 		if debug {
-			log.Printf("-----TX-----")
 			log.Printf("Dst: %s\n", frame.Destination())
 			log.Printf("Src: %s\n", frame.Source())
 			log.Printf("Ethertype: % x\n", frame.Ethertype())
 			log.Printf("Payload: % x\n", frame.Payload())
 		}
-		ciphertext := ciper.Seal(nil, geratenonce(), []byte(frame), nil)
-		srcstr := hex.EncodeToString(frame.Source())
-		dststr := hex.EncodeToString(frame.Destination())
 		if dststr == "ffffffffffff" {
 			//broadcast
 			for todst, tostream := range routing {
@@ -108,15 +108,24 @@ func ServerTX() {
 					continue
 				}
 				if debug {
-					log.Printf("-----TX-Broadcast-----")
-					log.Printf("Dst: %s\n", frame.Destination())
-					log.Printf("Src: %s\n", frame.Source())
-					log.Printf("Ethertype: % x\n", frame.Ethertype())
-					log.Printf("Payload: % x\n", frame.Payload())
+					log.Printf("↑↑↑↑↑TX-Broadcast↑↑↑↑↑")
 				}
-				tostream.Write(ciphertext)
+				conn, ok := mapconn[todst]
+				if !ok {
+					continue
+				} else {
+					_, err = tostream.Write(ciphertext)
+					if err != nil {
+						conn.Close()
+						delete(routing, todst)
+						delete(mapconn, todst)
+						log.Println(err)
+						return
+					}
+				}
 			}
 		} else {
+			//unicast
 			tostream, ok := routing[dststr]
 			if !ok {
 				//according to the rule:broadcast this frame or handle it to system
@@ -129,40 +138,61 @@ func ServerTX() {
 						continue
 					}
 					if debug {
-						log.Printf("-----TX-Broadcast-Study----")
-						log.Printf("Dst: %s\n", frame.Destination())
-						log.Printf("Src: %s\n", frame.Source())
-						log.Printf("Ethertype: % x\n", frame.Ethertype())
-						log.Printf("Payload: % x\n", frame.Payload())
+						log.Printf("↑↑↑↑↑TX-Broadcast-Study↑↑↑↑↑")
 					}
-					tostream.Write(ciphertext)
+					conn, ok := mapconn[todst]
+					if !ok {
+						continue
+					} else {
+						_, err = tostream.Write(ciphertext)
+						if err != nil {
+							conn.Close()
+							delete(routing, todst)
+							delete(mapconn, todst)
+							log.Println(err)
+							return
+						}
+					}
 				}
 			} else {
 				// if dst online send it directly
 				if debug {
-					log.Printf("-----TX-----")
-					log.Printf("Dst: %s\n", frame.Destination())
-					log.Printf("Src: %s\n", frame.Source())
-					log.Printf("Ethertype: % x\n", frame.Ethertype())
-					log.Printf("Payload: % x\n", frame.Payload())
+					log.Printf("↑↑↑↑↑TX-Unicast↑↑↑↑↑")
 				}
-				tostream.Write(ciphertext)
+				conn, ok := mapconn[dststr]
+				if !ok {
+					continue
+				} else {
+					_, err = tostream.Write(ciphertext)
+					if err != nil {
+						conn.Close()
+						delete(routing, dststr)
+						delete(mapconn, dststr)
+						log.Println(err)
+						return
+					}
+				}
 			}
 		}
 	}
 }
 
 // Start a server that echos all data on the first stream opened by the client
-func ServerRX(conn quic.Session) {
+func ServerRX(thisconn quic.Session) {
 	ciper, err := gerateAEAD(key)
 	if err != nil {
-		conn.Close()
+		thisconn.Close()
 		log.Println(err)
 		return
 	}
-	stream, err := conn.AcceptStream()
+	thisconnmac := []string{}
+	stream, err := thisconn.AcceptStream()
 	if err != nil {
-		conn.Close()
+		for item := range thisconnmac {
+			delete(routing, thisconnmac[item])
+			delete(mapconn, thisconnmac[item])
+		}
+		thisconn.Close()
 		log.Println(err)
 		return
 	}
@@ -172,7 +202,7 @@ func ServerRX(conn quic.Session) {
 		messagelen, err := stream.Read(message)
 		if err != nil {
 			stream.Close()
-			conn.Close()
+			thisconn.Close()
 			log.Println(err)
 			return
 		}
@@ -187,9 +217,11 @@ func ServerRX(conn quic.Session) {
 		frame = ethernet.Frame([]byte(plaintext))
 		srcstr := hex.EncodeToString(frame.Source())
 		routing[srcstr] = stream
+		mapconn[srcstr] = thisconn
+		thisconnmac = append(thisconnmac, srcstr)
 		dststr := hex.EncodeToString(frame.Destination())
+		ciphertext := ciper.Seal(nil, geratenonce(), []byte(frame), nil)
 		if debug {
-			log.Printf("-----RX-----")
 			log.Printf("Dst: %s\n", frame.Destination())
 			log.Printf("Src: %s\n", frame.Source())
 			log.Printf("Ethertype: % x\n", frame.Ethertype())
@@ -206,65 +238,95 @@ func ServerRX(conn quic.Session) {
 					continue
 				}
 				if debug {
-					log.Printf("-----Forward-Broadcast-----")
-					log.Printf("Dst: %s\n", frame.Destination())
-					log.Printf("Src: %s\n", frame.Source())
-					log.Printf("Ethertype: % x\n", frame.Ethertype())
-					log.Printf("Payload: % x\n", frame.Payload())
+					log.Printf("↑↑↑↑↑Forward-Broadcast↑↑↑↑↑")
 				}
-				ciphertext := ciper.Seal(nil, geratenonce(), []byte(frame), nil)
-				tostream.Write(ciphertext)
+				conn, ok := mapconn[todst]
+				if !ok {
+					continue
+				} else {
+					_, err = tostream.Write(ciphertext)
+					if err != nil {
+						delete(routing, todst)
+						delete(mapconn, todst)
+						conn.Close()
+						log.Println(err)
+						return
+					}
+				}
 			}
 			//write to local?
-			//TBE
-		} else {
-			if dststr == localmac {
-				frame = ethernet.Frame([]byte(plaintext))
+			if !forwardOnly {
 				_, err = ifce.Write(frame)
 				if err != nil {
 					log.Fatal(err)
 				}
 				if debug {
-					log.Printf("-----RX-Local----")
-					log.Printf("Dst: %s\n", frame.Destination())
-					log.Printf("Src: %s\n", frame.Source())
-					log.Printf("Ethertype: % x\n", frame.Ethertype())
-					log.Printf("Payload: % x\n", frame.Payload())
-				}
-			}
-
-			tostream, ok := routing[dststr]
-			if !ok {
-				//according to the rule:broadcast this frame or handle it to system
-				for todst, tostream := range routing {
-					//avoid loopback
-					if tostream == stream {
-						continue
-					}
-					if todst == srcstr {
-						continue
-					}
-					if debug {
-						log.Printf("-----Forward-Broadcast-Study----")
-						log.Printf("Dst: %s\n", frame.Destination())
-						log.Printf("Src: %s\n", frame.Source())
-						log.Printf("Ethertype: % x\n", frame.Ethertype())
-						log.Printf("Payload: % x\n", frame.Payload())
-					}
-					ciphertext := ciper.Seal(nil, geratenonce(), []byte(frame), nil)
-					tostream.Write(ciphertext)
+					log.Printf("↑↑↑↑↑RX-Broadcast↑↑↑↑↑")
 				}
 			} else {
-				// if dst online send it directly
 				if debug {
-					log.Printf("-----Forward-----")
-					log.Printf("Dst: %s\n", frame.Destination())
-					log.Printf("Src: %s\n", frame.Source())
-					log.Printf("Ethertype: % x\n", frame.Ethertype())
-					log.Printf("Payload: % x\n", frame.Payload())
+					log.Printf("↑↑↑↑↑Ignore-RX-Broadcast↑↑↑↑↑")
 				}
-				ciphertext := ciper.Seal(nil, geratenonce(), []byte(frame), nil)
-				tostream.Write(ciphertext)
+			}
+		} else {
+			if dststr == localmac {
+				if !forwardOnly {
+					_, err = ifce.Write(frame)
+					if err != nil {
+						log.Fatal(err)
+					}
+					if debug {
+						log.Printf("↑↑↑↑↑RX-Local↑↑↑↑↑")
+					}
+				}
+			} else {
+				tostream, ok := routing[dststr]
+				if !ok {
+					//according to the rule:broadcast this frame or handle it to system
+					for todst, tostream := range routing {
+						//avoid loopback
+						if tostream == stream {
+							continue
+						}
+						if todst == srcstr {
+							continue
+						}
+						if debug {
+							log.Printf("↑↑↑↑↑Forward-Broadcast-Study↑↑↑↑↑")
+						}
+						conn, ok := mapconn[todst]
+						if !ok {
+							continue
+						} else {
+							_, err = tostream.Write(ciphertext)
+							if err != nil {
+								delete(routing, todst)
+								delete(mapconn, todst)
+								conn.Close()
+								log.Println(err)
+								return
+							}
+						}
+					}
+				} else {
+					// if dst online send it directly
+					if debug {
+						log.Printf("↑↑↑↑↑Forward↑↑↑↑↑")
+					}
+					conn, ok := mapconn[dststr]
+					if !ok {
+						continue
+					} else {
+						_, err = tostream.Write(ciphertext)
+						if err != nil {
+							delete(routing, dststr)
+							delete(mapconn, dststr)
+							conn.Close()
+							log.Println(err)
+							return
+						}
+					}
+				}
 			}
 		}
 	}
