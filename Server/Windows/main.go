@@ -188,10 +188,6 @@ func ServerRX(thisconn quic.Session) {
 	thisconnmac := []string{}
 	stream, err := thisconn.AcceptStream()
 	if err != nil {
-		for item := range thisconnmac {
-			delete(routing, thisconnmac[item])
-			delete(mapconn, thisconnmac[item])
-		}
 		thisconn.Close()
 		log.Println(err)
 		return
@@ -201,6 +197,10 @@ func ServerRX(thisconn quic.Session) {
 		message := make([]byte, 1048576)
 		messagelen, err := stream.Read(message)
 		if err != nil {
+			for item := range thisconnmac {
+				delete(routing, thisconnmac[item])
+				delete(mapconn, thisconnmac[item])
+			}
 			stream.Close()
 			thisconn.Close()
 			log.Println(err)
@@ -250,7 +250,7 @@ func ServerRX(thisconn quic.Session) {
 						delete(mapconn, todst)
 						conn.Close()
 						log.Println(err)
-						return
+						continue
 					}
 				}
 			}
@@ -278,6 +278,8 @@ func ServerRX(thisconn quic.Session) {
 					if debug {
 						log.Printf("↑↑↑↑↑RX-Local↑↑↑↑↑")
 					}
+				} else {
+					log.Printf("↑↑↑↑↑Ignore-RX-Local↑↑↑↑↑")
 				}
 			} else {
 				tostream, ok := routing[dststr]
@@ -304,7 +306,7 @@ func ServerRX(thisconn quic.Session) {
 								delete(mapconn, todst)
 								conn.Close()
 								log.Println(err)
-								return
+								continue
 							}
 						}
 					}
@@ -323,7 +325,7 @@ func ServerRX(thisconn quic.Session) {
 							delete(mapconn, dststr)
 							conn.Close()
 							log.Println(err)
-							return
+							continue
 						}
 					}
 				}
