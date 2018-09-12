@@ -120,7 +120,7 @@ func ServerTX() {
 						delete(routing, todst)
 						delete(mapconn, todst)
 						log.Println(err)
-						return
+						continue
 					}
 				}
 			}
@@ -150,7 +150,7 @@ func ServerTX() {
 							delete(routing, todst)
 							delete(mapconn, todst)
 							log.Println(err)
-							return
+							continue
 						}
 					}
 				}
@@ -169,7 +169,7 @@ func ServerTX() {
 						delete(routing, dststr)
 						delete(mapconn, dststr)
 						log.Println(err)
-						return
+						continue
 					}
 				}
 			}
